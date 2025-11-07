@@ -12,7 +12,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql
+      - ./backend/sql/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U funduser"]
       interval: 10s
@@ -45,6 +45,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
       - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000"]}
       - UPLOAD_DIR=/app/uploads
     volumes:
       - ./backend:/app
@@ -56,7 +57,7 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        python app/db/init_db.py &&
+        python -m app.db.init_db &&
         uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       "
 

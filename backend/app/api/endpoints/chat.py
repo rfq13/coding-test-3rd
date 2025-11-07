@@ -39,6 +39,7 @@ async def process_chat_query(
     response = await query_engine.process_query(
         query=request.query,
         fund_id=request.fund_id,
+        document_ids=request.document_ids,
         conversation_history=conversation_history
     )
     
@@ -47,6 +48,7 @@ async def process_chat_query(
         if request.conversation_id not in conversations:
             conversations[request.conversation_id] = {
                 "fund_id": request.fund_id,
+                "document_ids": request.document_ids,
                 "messages": [],
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()

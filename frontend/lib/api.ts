@@ -75,10 +75,11 @@ export const fundApi = {
 
 // Chat APIs
 export const chatApi = {
-  query: async (query: string, fundId?: number, conversationId?: string) => {
+  query: async (query: string, fundId?: number, conversationId?: string, documentIds?: number[]) => {
     const response = await api.post('/api/chat/query', {
       query,
       fund_id: fundId,
+      document_ids: documentIds,
       conversation_id: conversationId,
     })
     return response.data

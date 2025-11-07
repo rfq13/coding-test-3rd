@@ -15,6 +15,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from app.core.config import settings
 from app.db.session import SessionLocal
+import json
 
 
 class VectorStore:
@@ -93,7 +94,7 @@ class VectorStore:
             # Insert into database
             insert_sql = text("""
                 INSERT INTO document_embeddings (document_id, fund_id, content, embedding, metadata)
-                VALUES (:document_id, :fund_id, :content, :embedding::vector, :metadata::jsonb)
+                VALUES (:document_id, :fund_id, :content, CAST(:embedding AS vector), CAST(:metadata AS jsonb))
             """)
             
             self.db.execute(insert_sql, {
@@ -101,7 +102,7 @@ class VectorStore:
                 "fund_id": metadata.get("fund_id"),
                 "content": content,
                 "embedding": str(embedding_list),
-                "metadata": str(metadata)
+                "metadata": json.dumps(metadata)
             })
             self.db.commit()
         except Exception as e:
@@ -142,8 +143,14 @@ class VectorStore:
             if filter_metadata:
                 conditions = []
                 for key, value in filter_metadata.items():
-                    if key in ["document_id", "fund_id"]:
+                    # Support filtering by single fund_id or document_id
+                    if key in ["document_id", "fund_id"] and isinstance(value, (int, str)):
                         conditions.append(f"{key} = {value}")
+                    # Support filtering by a list of document IDs
+                    if key == "document_ids" and isinstance(value, list) and len(value) > 0:
+                        # Ensure all values are ints
+                        doc_ids = ",".join(str(int(v)) for v in value)
+                        conditions.append(f"document_id IN ({doc_ids})")
                 if conditions:
                     where_clause = "WHERE " + " AND ".join(conditions)
             
@@ -155,10 +162,10 @@ class VectorStore:
                     fund_id,
                     content,
                     metadata,
-                    1 - (embedding <=> :query_embedding::vector) as similarity_score
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity_score
                 FROM document_embeddings
                 {where_clause}
-                ORDER BY embedding <=> :query_embedding::vector
+                ORDER BY embedding <=> CAST(:query_embedding AS vector)
                 LIMIT :k
             """)
             

@@ -37,6 +37,7 @@ class QueryEngine:
         self, 
         query: str, 
         fund_id: Optional[int] = None,
+        document_ids: Optional[List[int]] = None,
         conversation_history: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
@@ -56,7 +57,12 @@ class QueryEngine:
         intent = await self._classify_intent(query)
         
         # Step 2: Retrieve relevant context from vector store
-        filter_metadata = {"fund_id": fund_id} if fund_id else None
+        # Build filter metadata: prefer document_ids when provided; fallback to fund_id
+        filter_metadata = None
+        if document_ids:
+            filter_metadata = {"document_ids": document_ids}
+        elif fund_id:
+            filter_metadata = {"fund_id": fund_id}
         relevant_docs = await self.vector_store.similarity_search(
             query=query,
             k=settings.TOP_K_RESULTS,

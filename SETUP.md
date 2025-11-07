@@ -157,6 +157,11 @@ CHUNK_OVERLAP=200
 # RAG
 TOP_K_RESULTS=5
 SIMILARITY_THRESHOLD=0.7
+
+# CORS
+# Override allowed frontend origins when not using default (http://localhost:3000)
+# Use JSON list format
+ALLOWED_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
 ```
 
 ### Frontend Configuration

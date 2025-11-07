@@ -3,6 +3,8 @@ Application configuration
 """
 from pydantic_settings import BaseSettings
 from typing import List
+from pydantic import field_validator
+import json
 
 
 class Settings(BaseSettings):
@@ -16,11 +18,38 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     
     # CORS
+    # Default to standard dev origins; override via .env with JSON list, e.g.:
+    # ALLOWED_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
-        "http://localhost:3001",
         "http://127.0.0.1:3000",
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _parse_allowed_origins(cls, v):
+        """Allow env to provide JSON list, comma-separated string, or empty.
+
+        - Empty/None: fallback to default dev origins
+        - JSON string: parse into list
+        - Comma-separated: split and strip
+        """
+        if v is None:
+            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return ["http://localhost:3000", "http://127.0.0.1:3000"]
+            # Try JSON list first
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                pass
+            # Fallback to comma-separated
+            return [item.strip() for item in s.split(",") if item.strip()]
+        return v
     
     # Database
     DATABASE_URL: str = "postgresql://funduser:fundpass@localhost:5432/funddb"
