@@ -40,7 +40,9 @@ async def process_chat_query(
         query=request.query,
         fund_id=request.fund_id,
         document_ids=request.document_ids,
-        conversation_history=conversation_history
+        conversation_history=conversation_history,
+        strategy=request.strategy,
+        weights=request.weights
     )
     
     # Update conversation history

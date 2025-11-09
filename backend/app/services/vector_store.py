@@ -8,6 +8,7 @@ TODO: Implement vector storage using pgvector
 - Handle metadata filtering
 """
 from typing import List, Dict, Any, Optional
+import math
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -50,6 +51,7 @@ class VectorStore:
         try:
             # Enable pgvector extension
             self.db.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            self.db.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
             
             # Create embeddings table
             # Dimension: 1536 for OpenAI, 384 for sentence-transformers
@@ -69,6 +71,14 @@ class VectorStore:
             CREATE INDEX IF NOT EXISTS document_embeddings_embedding_idx 
             ON document_embeddings USING ivfflat (embedding vector_cosine_ops)
             WITH (lists = 100);
+
+            -- Full-text search index on content
+            CREATE INDEX IF NOT EXISTS document_embeddings_tsv_idx
+            ON document_embeddings USING GIN (to_tsvector('simple', content));
+
+            -- Trigram index for fuzzy/pattern matching
+            CREATE INDEX IF NOT EXISTS document_embeddings_trgm_idx
+            ON document_embeddings USING GIN (content gin_trgm_ops);
             """
             
             self.db.execute(text(create_table_sql))
@@ -189,6 +199,192 @@ class VectorStore:
             return results
         except Exception as e:
             print(f"Error in similarity search: {e}")
+            return []
+
+    async def lexical_search(
+        self,
+        query: str,
+        k: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        language: str = 'simple'
+    ) -> List[Dict[str, Any]]:
+        """
+        Lexical search using PostgreSQL full-text search
+
+        Uses to_tsvector(content) and websearch_to_tsquery(query), ranked with ts_rank.
+        """
+        try:
+            # Build optional filters
+            conditions = []
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    if key in ["document_id", "fund_id"] and isinstance(value, (int, str)):
+                        conditions.append(f"{key} = {value}")
+                    if key == "document_ids" and isinstance(value, list) and len(value) > 0:
+                        doc_ids = ",".join(str(int(v)) for v in value)
+                        conditions.append(f"document_id IN ({doc_ids})")
+
+            where_clause = ""
+            if conditions:
+                where_clause = "WHERE " + " AND ".join(conditions)
+
+            sql = text(f"""
+                SELECT 
+                    id,
+                    document_id,
+                    fund_id,
+                    content,
+                    metadata,
+                    ts_rank(to_tsvector('{language}', content), websearch_to_tsquery(:q)) AS score
+                FROM document_embeddings
+                {where_clause}
+                ORDER BY score DESC
+                LIMIT :k
+            """)
+
+            result = self.db.execute(sql, {"q": query, "k": k})
+            rows = []
+            for row in result:
+                rows.append({
+                    "id": row[0],
+                    "document_id": row[1],
+                    "fund_id": row[2],
+                    "content": row[3],
+                    "metadata": row[4],
+                    "score": float(row[5]) if row[5] is not None else 0.0,
+                })
+            return rows
+        except Exception as e:
+            print(f"Error in lexical search: {e}")
+            return []
+
+    async def pattern_search(
+        self,
+        query: str,
+        k: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        similarity_threshold: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """
+        Pattern/fuzzy search using pg_trgm similarity
+
+        Filters using content % :q and ranks by similarity(content, :q).
+        """
+        try:
+            conditions = []
+            # Add fuzzy operator condition
+            conditions.append("content % :q")
+
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    if key in ["document_id", "fund_id"] and isinstance(value, (int, str)):
+                        conditions.append(f"{key} = {value}")
+                    if key == "document_ids" and isinstance(value, list) and len(value) > 0:
+                        doc_ids = ",".join(str(int(v)) for v in value)
+                        conditions.append(f"document_id IN ({doc_ids})")
+
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+            sql = text(f"""
+                SELECT 
+                    id,
+                    document_id,
+                    fund_id,
+                    content,
+                    metadata,
+                    similarity(content, :q) AS score
+                FROM document_embeddings
+                {where_clause}
+                AND similarity(content, :q) >= :threshold
+                ORDER BY score DESC
+                LIMIT :k
+            """)
+
+            result = self.db.execute(sql, {"q": query, "threshold": similarity_threshold, "k": k})
+            rows = []
+            for row in result:
+                rows.append({
+                    "id": row[0],
+                    "document_id": row[1],
+                    "fund_id": row[2],
+                    "content": row[3],
+                    "metadata": row[4],
+                    "score": float(row[5]) if row[5] is not None else 0.0,
+                })
+            return rows
+        except Exception as e:
+            print(f"Error in pattern search: {e}")
+            return []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        k: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        weights: Optional[Dict[str, float]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid search combining dense, lexical, and pattern using Reciprocal Rank Fusion.
+        """
+        try:
+            # Fetch candidates from each method
+            k_each = max(k, 10)
+            dense = await self.similarity_search(query, k_each, filter_metadata)
+            lexical = await self.lexical_search(query, k_each, filter_metadata)
+            pattern = await self.pattern_search(query, k_each, filter_metadata)
+
+            # Build rank maps
+            def rank_map(results: List[Dict[str, Any]]):
+                return {res["id"]: idx for idx, res in enumerate(results)}
+
+            r_dense = rank_map(dense)
+            r_lex = rank_map(lexical)
+            r_pat = rank_map(pattern)
+
+            # Weights default
+            w_dense = (weights or {}).get("dense", 1.0)
+            w_lex = (weights or {}).get("lexical", 1.0)
+            w_pat = (weights or {}).get("pattern", 1.0)
+
+            k_rrf = 60.0
+            scores: Dict[int, float] = {}
+            items: Dict[int, Dict[str, Any]] = {}
+
+            # Union of IDs
+            all_ids = set(list(r_dense.keys()) + list(r_lex.keys()) + list(r_pat.keys()))
+
+            for _id in all_ids:
+                s = 0.0
+                if _id in r_dense:
+                    s += w_dense * (1.0 / (k_rrf + r_dense[_id] + 1))
+                if _id in r_lex:
+                    s += w_lex * (1.0 / (k_rrf + r_lex[_id] + 1))
+                if _id in r_pat:
+                    s += w_pat * (1.0 / (k_rrf + r_pat[_id] + 1))
+                scores[_id] = s
+
+            # Resolve item content (prefer dense, then lexical, then pattern)
+            def get_item(_id: int) -> Dict[str, Any]:
+                for coll in (dense, lexical, pattern):
+                    for r in coll:
+                        if r["id"] == _id:
+                            return r
+                return {}
+
+            for _id in all_ids:
+                items[_id] = get_item(_id)
+
+            ranked = sorted(all_ids, key=lambda x: scores.get(x, 0.0), reverse=True)
+            out: List[Dict[str, Any]] = []
+            for _id in ranked[:k]:
+                item = items[_id]
+                # Attach fused score
+                item = dict(item)
+                item["score"] = float(scores[_id])
+                out.append(item)
+            return out
+        except Exception as e:
+            print(f"Error in hybrid search: {e}")
             return []
     
     async def _get_embedding(self, text: str) -> np.ndarray:

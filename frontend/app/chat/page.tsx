@@ -1,7 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, FileText, ChevronDown, Search } from "lucide-react";
+import {
+  Send,
+  Loader2,
+  FileText,
+  ChevronDown,
+  Search,
+  HelpCircle,
+} from "lucide-react";
 import { chatApi, documentApi } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
@@ -22,6 +29,9 @@ export default function ChatPage() {
   const [loadingDocuments, setLoadingDocuments] = useState<boolean>(false);
   const [documentsError, setDocumentsError] = useState<string>("");
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
+  const [strategy, setStrategy] = useState<
+    "dense" | "lexical" | "pattern" | "hybrid"
+  >("hybrid");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,7 +80,8 @@ export default function ChatPage() {
         input,
         undefined,
         conversationId,
-        selectedDocumentIds.length ? selectedDocumentIds : undefined
+        selectedDocumentIds.length ? selectedDocumentIds : undefined,
+        strategy
       );
 
       const assistantMessage: Message = {
@@ -120,8 +131,56 @@ export default function ChatPage() {
             className="text-xs text-blue-600 hover:underline"
             onClick={() => setSelectedDocumentIds([])}
           >
-            Gunakan semua dokumen
+            Use All Documents
           </button>
+          <div className="ml-auto flex items-center gap-2">
+            <label className="text-sm text-gray-700">Strategy:</label>
+            <select
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value as any)}
+              className="px-2 py-2 border border-gray-300 rounded-md text-sm bg-white"
+            >
+              <option value="hybrid">Hybrid</option>
+              <option value="dense">Dense</option>
+              <option value="lexical">Lexical</option>
+              <option value="pattern">Pattern</option>
+            </select>
+            {/* Info tooltip for strategy */}
+            {strategy && (
+              <div className="relative group">
+                <HelpCircle
+                  className="w-4 h-4 text-gray-500 cursor-pointer"
+                  aria-label="Search strategy info"
+                />
+                {(() => {
+                  const titles: Record<string, string> = {
+                    hybrid: "Hybrid Strategy",
+                    dense: "Dense Strategy",
+                    lexical: "Lexical Strategy",
+                    pattern: "Pattern Strategy",
+                  };
+                  const descriptions: Record<string, string> = {
+                    hybrid:
+                      "Combines dense embeddings (cosine similarity), lexical full-text search (ts_rank), and trigram fuzzy matching (pg_trgm). Rankings are fused via Reciprocal Rank Fusion (RRF), improving recall and robustness to typos. May slightly increase latency. Document filters are respected.",
+                    dense:
+                      "Uses embedding similarity via pgvector (cosine). Best for semantic relevance and understanding context, less strict about exact phrase matching. Fast retrieval but may miss exact keyword constraints.",
+                    lexical:
+                      "Uses PostgreSQL full-text search (websearch_to_tsquery + ts_rank). Prioritizes exact keywords, proximity, and query operators. Great for strict phrasing; less tolerant to typos and may miss purely semantic matches.",
+                    pattern:
+                      "Uses trigram similarity (pg_trgm) for fuzzy and partial matching. Helpful for misspellings and noisy queries. Can return loosely related results; may be slower on very long texts.",
+                  };
+                  const title = titles[strategy] ?? titles.hybrid;
+                  const description = descriptions[strategy] ?? descriptions.hybrid;
+                  return (
+                    <div className="absolute right-0 top-full mt-2 w-80 p-3 bg-white border border-gray-200 rounded-md shadow-lg text-xs text-gray-700 opacity-0 pointer-events-none group-hover:opacity-100">
+                      <div className="font-semibold mb-1">{title}</div>
+                      <p>{description}</p>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
         </div>
         {/* Selected chips preview */}
         {selectedDocumentIds.length > 0 && (

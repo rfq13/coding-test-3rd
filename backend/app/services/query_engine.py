@@ -38,7 +38,9 @@ class QueryEngine:
         query: str, 
         fund_id: Optional[int] = None,
         document_ids: Optional[List[int]] = None,
-        conversation_history: List[Dict[str, str]] = None
+        conversation_history: List[Dict[str, str]] = None,
+        strategy: Optional[str] = None,
+        weights: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Process a user query using RAG
@@ -63,11 +65,33 @@ class QueryEngine:
             filter_metadata = {"document_ids": document_ids}
         elif fund_id:
             filter_metadata = {"fund_id": fund_id}
-        relevant_docs = await self.vector_store.similarity_search(
-            query=query,
-            k=settings.TOP_K_RESULTS,
-            filter_metadata=filter_metadata
-        )
+        # Choose retrieval strategy (default to 'hybrid' for better recall)
+        used_strategy = (strategy or "hybrid").lower()
+        if used_strategy == "lexical":
+            relevant_docs = await self.vector_store.lexical_search(
+                query=query,
+                k=settings.TOP_K_RESULTS,
+                filter_metadata=filter_metadata
+            )
+        elif used_strategy == "pattern":
+            relevant_docs = await self.vector_store.pattern_search(
+                query=query,
+                k=settings.TOP_K_RESULTS,
+                filter_metadata=filter_metadata
+            )
+        elif used_strategy == "hybrid":
+            relevant_docs = await self.vector_store.hybrid_search(
+                query=query,
+                k=settings.TOP_K_RESULTS,
+                filter_metadata=filter_metadata,
+                weights=weights
+            )
+        else:
+            relevant_docs = await self.vector_store.similarity_search(
+                query=query,
+                k=settings.TOP_K_RESULTS,
+                filter_metadata=filter_metadata
+            )
         
         # Step 3: Calculate metrics if needed
         metrics = None
