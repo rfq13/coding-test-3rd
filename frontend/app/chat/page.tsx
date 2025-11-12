@@ -7,10 +7,14 @@ import {
   FileText,
   ChevronDown,
   Search,
-  HelpCircle,
+  Trash2,
+  Plus,
+  Menu,
+  X,
 } from "lucide-react";
 import { chatApi, documentApi } from "@/lib/api";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatLLMResponse } from "@/lib/utils";
+import "katex/dist/katex.min.css";
 
 interface Message {
   role: "user" | "assistant";
@@ -25,20 +29,49 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string>();
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [loadingConversations, setLoadingConversations] =
+    useState<boolean>(false);
+  const [sidebarSearch, setSidebarSearch] = useState<string>("");
   const [documents, setDocuments] = useState<any[]>([]);
   const [loadingDocuments, setLoadingDocuments] = useState<boolean>(false);
   const [documentsError, setDocumentsError] = useState<string>("");
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<number[]>([]);
-  const [strategy, setStrategy] = useState<
-    "dense" | "lexical" | "pattern" | "hybrid"
-  >("hybrid");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Create conversation on mount (no fund filter by default)
-    chatApi.createConversation(undefined).then((conv) => {
-      setConversationId(conv.conversation_id);
-    });
+    // Load conversations on mount; don't create new automatically
+    setLoadingConversations(true);
+    chatApi
+      .listConversations(undefined)
+      .then((list) => {
+        setConversations(list || []);
+        if (list && list.length > 0) {
+          const first = list[0];
+          setConversationId(first.conversation_id);
+          // Ensure complete history is loaded with getConversation call
+          chatApi
+            .getConversation(first.conversation_id)
+            .then((conv) => {
+              setMessages(
+                (conv.messages || []).map((m: any) => ({
+                  role: m.role,
+                  content: m.content,
+                  timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+                }))
+              );
+            })
+            .catch((err) => {
+              setErrorMsg(err?.message || "Failed to load first conversation");
+            });
+        }
+      })
+      .catch((err) => {
+        setErrorMsg(err?.message || "Failed to load conversation list");
+      })
+      .finally(() => setLoadingConversations(false));
   }, []);
 
   useEffect(() => {
@@ -52,7 +85,7 @@ export default function ChatPage() {
       })
       .catch((err) => {
         setDocuments([]);
-        setDocumentsError("Tidak dapat memuat daftar dokumen");
+        setDocumentsError("Failed to load document list");
       })
       .finally(() => setLoadingDocuments(false));
   }, []);
@@ -61,9 +94,96 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const refreshConversations = async (q?: string) => {
+    try {
+      const list = await chatApi.listConversations(undefined, q);
+      setConversations(list || []);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to load conversation list");
+    }
+  };
+
+  useEffect(() => {
+    // Debounce search sidebar conversations
+    const t = setTimeout(() => {
+      refreshConversations(sidebarSearch || undefined);
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarSearch]);
+
+  const handleNewConversation = async () => {
+    try {
+      const conv = await chatApi.createConversation(undefined);
+      setConversationId(conv.conversation_id);
+      setMessages([]);
+      await refreshConversations();
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to create conversation");
+    }
+  };
+
+  const handleSelectConversation = async (cid: string) => {
+    if (cid === conversationId) return;
+    setConversationId(cid);
+    try {
+      const conv = await chatApi.getConversation(cid);
+      setMessages(
+        (conv.messages || []).map((m: any) => ({
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        }))
+      );
+    } catch (e) {
+      setErrorMsg((e as any)?.message || "Failed to load conversation");
+    }
+  };
+
+  const handleDeleteConversation = async (cid: string) => {
+    try {
+      await chatApi.deleteConversation(cid);
+      await refreshConversations();
+      if (cid === conversationId) {
+        const list = await chatApi.listConversations(undefined);
+        if (list && list.length > 0) {
+          const first = list[0];
+          setConversationId(first.conversation_id);
+          setMessages(
+            (first.messages || []).map((m: any) => ({
+              role: m.role,
+              content: m.content,
+              timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+            }))
+          );
+        } else {
+          // Do not create new conversation automatically; leave empty
+          setConversationId(undefined);
+          setMessages([]);
+        }
+      }
+    } catch (e) {
+      setErrorMsg((e as any)?.message || "Failed to delete conversation");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
+
+    // Create conversation if none exists on first send
+
+    let cid = conversationId;
+    if (!cid) {
+      try {
+        const conv = await chatApi.createConversation(undefined);
+        cid = conv.conversation_id;
+        setConversationId(cid);
+        await refreshConversations();
+      } catch (err) {
+        setErrorMsg((err as any)?.message || "Failed to create conversation");
+      }
+    }
 
     const userMessage: Message = {
       role: "user",
@@ -79,9 +199,8 @@ export default function ChatPage() {
       const response = await chatApi.query(
         input,
         undefined,
-        conversationId,
-        selectedDocumentIds.length ? selectedDocumentIds : undefined,
-        strategy
+        cid,
+        selectedDocumentIds.length ? selectedDocumentIds : undefined
       );
 
       const assistantMessage: Message = {
@@ -94,6 +213,7 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error: any) {
+      setErrorMsg(error?.message || "Failed to send message");
       const errorMessage: Message = {
         role: "assistant",
         content: `Sorry, I encountered an error: ${
@@ -108,163 +228,234 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto h-[calc(100vh-12rem)]">
-      <div className="mb-4">
-        <h1 className="text-4xl font-bold mb-2">Fund Analysis Chat</h1>
-        <p className="text-gray-600">
-          Ask questions about fund performance, metrics, and transactions
-        </p>
+    <div className="max-w-7xl mx-auto h-[calc(100vh-12rem)] px-4 sm:px-6 lg:px-8">
+      <div className="mb-4 sm:mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-1 sm:mb-2">
+              Fund Analysis Chat
+            </h1>
+            <p className="text-sm sm:text-base text-gray-600">
+              Ask questions about fund performance, metrics, and transactions
+            </p>
+          </div>
+          {/* Mobile menu button */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="md:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {sidebarOpen ? (
+              <X className="h-6 w-6" />
+            ) : (
+              <Menu className="h-6 w-6" />
+            )}
+          </button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-md flex flex-col h-full">
-        {/* Controls */}
-        <div className="border-b p-4 flex items-center gap-3 relative">
-          <DocumentSelector
-            documents={documents}
-            selectedIds={selectedDocumentIds}
-            onChange={setSelectedDocumentIds}
-            loading={loadingDocuments}
-            error={documentsError}
-          />
+      {errorMsg && (
+        <div className="mb-4 flex items-start justify-between rounded border border-red-300 bg-red-50 text-red-700 p-3">
+          <span className="text-sm">{errorMsg}</span>
           <button
-            type="button"
-            className="text-xs text-blue-600 hover:underline"
-            onClick={() => setSelectedDocumentIds([])}
+            onClick={() => setErrorMsg(null)}
+            className="ml-2 text-sm underline hover:text-red-900"
           >
-            Use All Documents
+            Dismiss
           </button>
-          <div className="ml-auto flex items-center gap-2">
-            <label className="text-sm text-gray-700">Strategy:</label>
-            <select
-              value={strategy}
-              onChange={(e) => setStrategy(e.target.value as any)}
-              className="px-2 py-2 border border-gray-300 rounded-md text-sm bg-white"
-            >
-              <option value="hybrid">Hybrid</option>
-              <option value="dense">Dense</option>
-              <option value="lexical">Lexical</option>
-              <option value="pattern">Pattern</option>
-            </select>
-            {/* Info tooltip for strategy */}
-            {strategy && (
-              <div className="relative group">
-                <HelpCircle
-                  className="w-4 h-4 text-gray-500 cursor-pointer"
-                  aria-label="Search strategy info"
-                />
-                {(() => {
-                  const titles: Record<string, string> = {
-                    hybrid: "Hybrid Strategy",
-                    dense: "Dense Strategy",
-                    lexical: "Lexical Strategy",
-                    pattern: "Pattern Strategy",
-                  };
-                  const descriptions: Record<string, string> = {
-                    hybrid:
-                      "Combines dense embeddings (cosine similarity), lexical full-text search (ts_rank), and trigram fuzzy matching (pg_trgm). Rankings are fused via Reciprocal Rank Fusion (RRF), improving recall and robustness to typos. May slightly increase latency. Document filters are respected.",
-                    dense:
-                      "Uses embedding similarity via pgvector (cosine). Best for semantic relevance and understanding context, less strict about exact phrase matching. Fast retrieval but may miss exact keyword constraints.",
-                    lexical:
-                      "Uses PostgreSQL full-text search (websearch_to_tsquery + ts_rank). Prioritizes exact keywords, proximity, and query operators. Great for strict phrasing; less tolerant to typos and may miss purely semantic matches.",
-                    pattern:
-                      "Uses trigram similarity (pg_trgm) for fuzzy and partial matching. Helpful for misspellings and noisy queries. Can return loosely related results; may be slower on very long texts.",
-                  };
-                  const title = titles[strategy] ?? titles.hybrid;
-                  const description = descriptions[strategy] ?? descriptions.hybrid;
-                  return (
-                    <div className="absolute right-0 top-full mt-2 w-80 p-3 bg-white border border-gray-200 rounded-md shadow-lg text-xs text-gray-700 opacity-0 pointer-events-none group-hover:opacity-100">
-                      <div className="font-semibold mb-1">{title}</div>
-                      <p>{description}</p>
-                    </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow-md grid grid-cols-1 md:grid-cols-12 h-full">
+        <div
+          className={`${
+            sidebarOpen
+              ? "block absolute inset-y-0 left-0 z-50 w-3/4 sm:w-1/2 md:w-2/5 bg-white shadow-lg"
+              : "hidden"
+          } md:block md:col-span-4 lg:col-span-3 xl:col-span-3 border-r flex flex-col h-full`}
+        >
+          <div className="p-3 sm:p-4 border-b space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Conversations</h2>
+              <button
+                onClick={handleNewConversation}
+                className="inline-flex items-center px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <Plus className="w-3 h-3 mr-1" /> New
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                value={sidebarSearch}
+                onChange={(e) => setSidebarSearch(e.target.value)}
+                placeholder="Search conversations..."
+                className="w-full pl-8 pr-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <Search className="w-4 h-4 text-gray-400 absolute left-2 top-2.5" />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loadingConversations ? (
+              <div className="p-4 text-gray-500 text-sm">Loading...</div>
+            ) : conversations.length === 0 ? (
+              <div className="p-4 text-gray-500 text-sm">No conversations</div>
+            ) : (
+              <ul>
+                {conversations.map((c: any) => {
+                  const firstUserMsg = (c.messages || []).find(
+                    (m: any) => m.role === "user"
                   );
-                })()}
-              </div>
+                  const baseMsg = firstUserMsg || (c.messages || [])[0];
+                  const title = baseMsg
+                    ? baseMsg.content.slice(0, 40)
+                    : "Chat pertama";
+                  const active = c.conversation_id === conversationId;
+                  return (
+                    <li
+                      key={c.conversation_id}
+                      className={`border-b p-3 flex items-center justify-between cursor-pointer ${
+                        active ? "bg-blue-50" : ""
+                      }`}
+                      onClick={() => {
+                        handleSelectConversation(c.conversation_id);
+                        setSidebarOpen(false); // Close sidebar on mobile after selection
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 line-clamp-1">
+                          {title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {new Date(c.updated_at).toLocaleString()}
+                        </p>
+                      </div>
+                      <button
+                        className="text-gray-400 hover:text-red-600 flex-shrink-0 ml-2"
+                        title="Delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteConversation(c.conversation_id);
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
         </div>
-        {/* Selected chips preview */}
-        {selectedDocumentIds.length > 0 && (
-          <div className="border-b px-4 py-2 flex flex-wrap gap-2">
-            {documents
-              .filter((d: any) => selectedDocumentIds.includes(d.id))
-              .slice(0, 5)
-              .map((d: any) => (
-                <span
-                  key={d.id}
-                  className="text-xs px-2 py-1 bg-gray-100 border border-gray-200 rounded"
-                >
-                  {d.file_name}
+
+        {/* Panel chat */}
+        <div className="col-span-1 md:col-span-8 lg:col-span-9 xl:col-span-9 flex flex-col">
+          {/* Controls */}
+          <div className="border-b p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3 relative">
+            <div className="flex items-center gap-3">
+              <DocumentSelector
+                documents={documents}
+                selectedIds={selectedDocumentIds}
+                onChange={setSelectedDocumentIds}
+                loading={loadingDocuments}
+                error={documentsError}
+              />
+              <button
+                type="button"
+                className="text-xs text-blue-600 hover:underline whitespace-nowrap"
+                onClick={() => setSelectedDocumentIds([])}
+              >
+                Use All Documents
+              </button>
+            </div>
+            <div className="ml-auto" />
+          </div>
+          {/* Selected chips preview */}
+          {selectedDocumentIds.length > 0 && (
+            <div className="border-b px-3 sm:px-4 py-2 flex flex-wrap gap-2">
+              {documents
+                .filter((d: any) => selectedDocumentIds.includes(d.id))
+                .slice(0, 5)
+                .map((d: any) => (
+                  <span
+                    key={d.id}
+                    className="text-xs px-2 py-1 bg-gray-100 border border-gray-200 rounded truncate max-w-[120px] sm:max-w-none"
+                    title={d.file_name}
+                  >
+                    {d.file_name}
+                  </span>
+                ))}
+              {selectedDocumentIds.length > 5 && (
+                <span className="text-xs text-gray-500">
+                  +{selectedDocumentIds.length - 5} lainnya
                 </span>
-              ))}
-            {selectedDocumentIds.length > 5 && (
-              <span className="text-xs text-gray-500">
-                +{selectedDocumentIds.length - 5} lainnya
-              </span>
+              )}
+            </div>
+          )}
+          {/* Messages Area */}
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 max-h-[50vh] sm:max-h-[60vh] md:max-h-[64vh]">
+            {messages.length === 0 && (
+              <div className="text-center py-8 sm:py-12">
+                <div className="text-gray-400 mb-4">
+                  <FileText className="w-12 h-12 sm:w-16 sm:h-16 mx-auto" />
+                </div>
+                <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-2">
+                  Start a conversation
+                </h3>
+                <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6">
+                  Try asking questions like:
+                </p>
+                <div className="space-y-2 max-w-md mx-auto">
+                  <SampleQuestion
+                    question="What is the current DPI?"
+                    onClick={() => setInput("What is the current DPI?")}
+                  />
+                  <SampleQuestion
+                    question="Calculate the IRR for this fund"
+                    onClick={() => setInput("Calculate the IRR for this fund")}
+                  />
+                  <SampleQuestion
+                    question="What does Paid-In Capital mean?"
+                    onClick={() => setInput("What does Paid-In Capital mean?")}
+                  />
+                </div>
+              </div>
             )}
+
+            {messages.map((message, index) => (
+              <MessageBubble key={index} message={message} />
+            ))}
+
+            {loading && (
+              <div className="flex items-center space-x-2 text-gray-500">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Thinking...</span>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
           </div>
-        )}
-        {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messages.length === 0 && (
-            <div className="text-center py-12">
-              <div className="text-gray-400 mb-4">
-                <FileText className="w-16 h-16 mx-auto" />
-              </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                Start a conversation
-              </h3>
-              <p className="text-gray-600 mb-6">Try asking questions like:</p>
-              <div className="space-y-2 max-w-md mx-auto">
-                <SampleQuestion
-                  question="What is the current DPI?"
-                  onClick={() => setInput("What is the current DPI?")}
-                />
-                <SampleQuestion
-                  question="Calculate the IRR for this fund"
-                  onClick={() => setInput("Calculate the IRR for this fund")}
-                />
-                <SampleQuestion
-                  question="What does Paid-In Capital mean?"
-                  onClick={() => setInput("What does Paid-In Capital mean?")}
-                />
-              </div>
-            </div>
-          )}
 
-          {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} />
-          ))}
-
-          {loading && (
-            <div className="flex items-center space-x-2 text-gray-500">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span>Thinking...</span>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t p-4">
-          <form onSubmit={handleSubmit} className="flex space-x-2">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask a question using selected documents..."
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={loading}
-            />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-            >
-              <Send className="w-4 h-4" />
-              <span>Send</span>
-            </button>
-          </form>
+          {/* Input Area */}
+          <div className="border-t p-3 sm:p-4">
+            <form onSubmit={handleSubmit} className="flex space-x-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask a question using selected documents..."
+                className="flex-1 px-3 sm:px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm sm:text-base"
+                disabled={loading}
+              />
+              <button
+                type="submit"
+                disabled={loading || !input.trim()}
+                className="px-4 sm:px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                <Send className="w-4 h-4" />
+                <span className="hidden sm:inline">Send</span>
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -339,7 +530,7 @@ function DocumentSelector({
       </button>
 
       {open && (
-        <div className="absolute z-20 mt-2 w-[360px] bg-white border border-gray-200 rounded-md shadow-lg">
+        <div className="absolute z-20 mt-2 w-[280px] sm:w-[320px] md:w-[360px] bg-white border border-gray-200 rounded-md shadow-lg right-0">
           <div className="p-2 border-b flex items-center gap-2">
             <div className="relative flex-1">
               <input
@@ -422,22 +613,30 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-3xl ${isUser ? "ml-12" : "mr-12"}`}>
+      <div
+        className={`max-w-full sm:max-w-3xl ${
+          isUser ? "ml-0 sm:ml-12" : "mr-0 sm:mr-12"
+        }`}
+      >
         <div
-          className={`rounded-lg p-4 ${
+          className={`rounded-lg p-3 sm:p-4 ${
             isUser ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-900"
           }`}
         >
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <div
+            dangerouslySetInnerHTML={{
+              __html: formatLLMResponse(message.content),
+            }}
+          />
         </div>
 
         {/* Metrics Display */}
         {message.metrics && (
-          <div className="mt-3 bg-white border border-gray-200 rounded-lg p-4">
+          <div className="mt-3 bg-white border border-gray-200 rounded-lg p-3 sm:p-4">
             <h4 className="font-semibold text-sm text-gray-700 mb-2">
               Calculated Metrics
             </h4>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {Object.entries(message.metrics).map(([key, value]) => {
                 if (value === null || value === undefined) return null;
 
@@ -465,16 +664,16 @@ function MessageBubble({ message }: { message: Message }) {
         {message.sources && message.sources.length > 0 && (
           <div className="mt-3">
             <details className="bg-white border border-gray-200 rounded-lg">
-              <summary className="px-4 py-2 cursor-pointer text-sm font-medium text-gray-700 hover:bg-gray-50">
+              <summary className="px-3 sm:px-4 py-2 cursor-pointer text-sm font-medium text-gray-700 hover:bg-gray-50">
                 View Sources ({message.sources.length})
               </summary>
-              <div className="px-4 py-3 space-y-2 border-t">
+              <div className="px-3 sm:px-4 py-3 space-y-2 border-t">
                 {message.sources.slice(0, 5).map((source, idx) => (
                   <div key={idx} className="text-xs bg-gray-50 p-2 rounded">
                     <p className="text-gray-700 line-clamp-3">
                       {source.content}
                     </p>
-                    <div className="mt-1 text-gray-600 flex gap-3">
+                    <div className="mt-1 text-gray-600 flex flex-wrap gap-2 sm:gap-3">
                       {source.score !== undefined && (
                         <span>
                           Relevance: {(source.score * 100).toFixed(0)}%
@@ -515,7 +714,7 @@ function SampleQuestion({
   return (
     <button
       onClick={onClick}
-      className="w-full text-left px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-sm text-gray-700 transition"
+      className="w-full text-left px-3 sm:px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-sm text-gray-700 transition"
     >
       &quot;{question}&quot;
     </button>

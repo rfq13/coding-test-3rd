@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
     ]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
@@ -35,11 +37,21 @@ class Settings(BaseSettings):
         - Comma-separated: split and strip
         """
         if v is None:
-            return ["http://localhost:3000", "http://127.0.0.1:3000"]
+            return [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001",
+            ]
         if isinstance(v, str):
             s = v.strip()
             if not s:
-                return ["http://localhost:3000", "http://127.0.0.1:3000"]
+                return [
+                    "http://localhost:3000",
+                    "http://127.0.0.1:3000",
+                    "http://localhost:3001",
+                    "http://127.0.0.1:3001",
+                ]
             # Try JSON list first
             try:
                 parsed = json.loads(s)
@@ -56,6 +68,10 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # Celery
+    CELERY_BROKER_URL: str | None = None
+    CELERY_RESULT_BACKEND: str | None = None
     
     # OpenAI
     OPENAI_API_KEY: str = ""
@@ -81,9 +97,15 @@ class Settings(BaseSettings):
     TOP_K_RESULTS: int = 5
     SIMILARITY_THRESHOLD: float = 0.7
     
-    class Config:
+class Config:
         env_file = ".env"
         case_sensitive = True
 
 
 settings = Settings()
+
+# Normalize Celery URLs: fallback to REDIS_URL when not explicitly set
+if not settings.CELERY_BROKER_URL:
+    settings.CELERY_BROKER_URL = settings.REDIS_URL
+if not settings.CELERY_RESULT_BACKEND:
+    settings.CELERY_RESULT_BACKEND = settings.REDIS_URL

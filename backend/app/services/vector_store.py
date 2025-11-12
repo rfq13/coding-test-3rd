@@ -17,6 +17,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from app.core.config import settings
 from app.db.session import SessionLocal
 import json
+from app.core.logging import get_logger
 
 
 class VectorStore:
@@ -26,6 +27,13 @@ class VectorStore:
         self.db = db or SessionLocal()
         self.embeddings = self._initialize_embeddings()
         self._ensure_extension()
+        # Ensure indexes are healthy on startup
+        try:
+            self._analyze_table()
+        except Exception:
+            # Non-fatal if analyze fails during early startup
+            pass
+        self.logger = get_logger("vector_store")
     
     def _initialize_embeddings(self):
         """Initialize embedding model"""
@@ -82,10 +90,84 @@ class VectorStore:
             """
             
             self.db.execute(text(create_table_sql))
+            # Add GIN index for full-text search (simple language)
+            self.db.execute(text(
+                """
+                CREATE INDEX IF NOT EXISTS document_embeddings_tsv_idx
+                ON document_embeddings USING GIN (to_tsvector('simple', content));
+                """
+            ))
             self.db.commit()
         except Exception as e:
-            print(f"Error ensuring pgvector extension: {e}")
+            self.logger.error(f"Error ensuring pgvector extension: {e}")
             self.db.rollback()
+
+    def _analyze_table(self):
+        """Run ANALYZE to update planner stats for document_embeddings."""
+        try:
+            self.db.execute(text("ANALYZE document_embeddings"))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def rebuild_ivfflat_index(self, lists: int | None = None):
+        """
+        Rebuild IVFFLAT index with a chosen number of lists.
+
+        If `lists` is None, choose sqrt(n_rows) rounded and clamped to [100, 2048].
+        """
+        try:
+            # Count rows to choose lists if not provided
+            if lists is None:
+                count_sql = text("SELECT COUNT(*) FROM document_embeddings")
+                result = self.db.execute(count_sql).scalar() or 0
+                # Choose lists ~ sqrt(n)
+                auto_lists = int(max(100, min(2048, math.sqrt(max(1, result)))))
+                lists = auto_lists
+
+            # Drop and recreate index
+            self.db.execute(text("DROP INDEX IF EXISTS document_embeddings_embedding_idx"))
+            self.db.execute(text(
+                f"""
+                CREATE INDEX document_embeddings_embedding_idx 
+                ON document_embeddings USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = {lists});
+                """
+            ))
+            self._analyze_table()
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error(f"Error rebuilding IVFFLAT index: {e}")
+            raise
+
+    def get_index_stats(self) -> Dict[str, Any]:
+        """Return basic stats about document_embeddings and its indexes."""
+        try:
+            stats: Dict[str, Any] = {}
+            # Table size
+            size_sql = text("SELECT pg_total_relation_size('document_embeddings')")
+            stats["table_size_bytes"] = int(self.db.execute(size_sql).scalar() or 0)
+
+            # Row count
+            count_sql = text("SELECT COUNT(*) FROM document_embeddings")
+            stats["row_count"] = int(self.db.execute(count_sql).scalar() or 0)
+
+            # Index definition
+            idxdef_sql = text(
+                """
+                SELECT indexname, indexdef 
+                FROM pg_indexes 
+                WHERE tablename = 'document_embeddings'
+                """
+            )
+            rows = self.db.execute(idxdef_sql).fetchall()
+            stats["indexes"] = [{"name": r[0], "def": r[1]} for r in rows]
+            return stats
+        except Exception as e:
+            self.logger.error(f"Error getting index stats: {e}")
+            return {}
     
     async def add_document(self, content: str, metadata: Dict[str, Any]):
         """
@@ -116,7 +198,7 @@ class VectorStore:
             })
             self.db.commit()
         except Exception as e:
-            print(f"Error adding document: {e}")
+            self.logger.error(f"Error adding document: {e}")
             self.db.rollback()
             raise
     
@@ -198,7 +280,7 @@ class VectorStore:
             
             return results
         except Exception as e:
-            print(f"Error in similarity search: {e}")
+            self.logger.error(f"Error in similarity search: {e}")
             return []
 
     async def lexical_search(
@@ -255,7 +337,7 @@ class VectorStore:
                 })
             return rows
         except Exception as e:
-            print(f"Error in lexical search: {e}")
+            self.logger.error(f"Error in lexical search: {e}")
             return []
 
     async def pattern_search(
@@ -313,7 +395,7 @@ class VectorStore:
                 })
             return rows
         except Exception as e:
-            print(f"Error in pattern search: {e}")
+            self.logger.error(f"Error in pattern search: {e}")
             return []
 
     async def hybrid_search(
@@ -384,7 +466,7 @@ class VectorStore:
                 out.append(item)
             return out
         except Exception as e:
-            print(f"Error in hybrid search: {e}")
+            self.logger.error(f"Error in hybrid search: {e}")
             return []
     
     async def _get_embedding(self, text: str) -> np.ndarray:
@@ -413,5 +495,5 @@ class VectorStore:
             
             self.db.commit()
         except Exception as e:
-            print(f"Error clearing vector store: {e}")
+            self.logger.error(f"Error clearing vector store: {e}")
             self.db.rollback()

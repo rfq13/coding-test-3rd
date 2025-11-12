@@ -20,8 +20,6 @@ class ChatQueryRequest(BaseModel):
     # Optional list of document IDs to filter RAG context
     document_ids: Optional[List[int]] = None
     conversation_id: Optional[str] = None
-    # Optional search strategy: 'dense' | 'lexical' | 'pattern' | 'hybrid'
-    strategy: Optional[str] = None
     # Optional weights for hybrid fusion: keys: dense, lexical, pattern
     weights: Optional[Dict[str, float]] = None
 

@@ -1,7 +1,7 @@
 """
 Document API endpoints
 """
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 import os
@@ -15,6 +15,7 @@ from app.schemas.document import (
     DocumentStatus
 )
 from app.services.document_processor import DocumentProcessor
+from app.tasks.documents import process_document_task as celery_process_document_task
 from app.core.config import settings
 
 router = APIRouter()
@@ -22,7 +23,6 @@ router = APIRouter()
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     fund_id: int = None,
     db: Session = Depends(get_db)
@@ -66,9 +66,8 @@ async def upload_document(
     db.commit()
     db.refresh(document)
     
-    # Start background processing
-    background_tasks.add_task(
-        process_document_task,
+    # Enqueue Celery task
+    async_result = celery_process_document_task.delay(
         document.id,
         file_path,
         fund_id or 1  # Default fund_id if not provided
@@ -76,41 +75,13 @@ async def upload_document(
     
     return DocumentUploadResponse(
         document_id=document.id,
-        task_id=None,
+        task_id=str(async_result.id),
         status="pending",
-        message="Document uploaded successfully. Processing started."
+        message="Document uploaded successfully. Celery processing started."
     )
 
 
-async def process_document_task(document_id: int, file_path: str, fund_id: int):
-    """Background task to process document"""
-    from app.db.session import SessionLocal
-    
-    db = SessionLocal()
-    
-    try:
-        # Update status to processing
-        document = db.query(Document).filter(Document.id == document_id).first()
-        document.parsing_status = "processing"
-        db.commit()
-        
-        # Process document
-        processor = DocumentProcessor()
-        result = await processor.process_document(file_path, document_id, fund_id)
-        
-        # Update status
-        document.parsing_status = result["status"]
-        if result["status"] == "failed":
-            document.error_message = result.get("error")
-        db.commit()
-        
-    except Exception as e:
-        document = db.query(Document).filter(Document.id == document_id).first()
-        document.parsing_status = "failed"
-        document.error_message = str(e)
-        db.commit()
-    finally:
-        db.close()
+# Celery handles background processing; FastAPI background task removed.
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatus)

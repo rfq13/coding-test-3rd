@@ -148,7 +148,6 @@ MAX_UPLOAD_SIZE=52428800  # 50MB
 
 # Vector Store
 VECTOR_STORE_PATH=/app/vector_store
-FAISS_INDEX_PATH=/app/faiss_index
 
 # Document Processing
 CHUNK_SIZE=1000
@@ -230,7 +229,9 @@ docker-compose restart postgres
 
 **Solution:**
 1. Verify documents were processed successfully
-2. Check FAISS index exists: `docker-compose exec backend ls -la /app/faiss_index/`
+2. Check pgvector is enabled and embeddings table exists:
+   - `docker-compose exec postgres psql -U funduser -d funddb -c "\\dx | grep vector"`
+   - `docker-compose exec postgres psql -U funduser -d funddb -c "\\dt | grep document_embeddings"`
 3. Verify embeddings are being generated (check logs)
 4. Try lowering `SIMILARITY_THRESHOLD` in config
 

@@ -129,12 +129,12 @@ The Fund Performance Analysis System is a full-stack application that combines d
 7. **SQL Storage**: Transactions saved to PostgreSQL
 8. **Text Chunking**: Text content split into chunks
 9. **Embedding**: Chunks converted to vectors
-10. **Vector Storage**: Embeddings saved to FAISS
+10. **Vector Storage**: Embeddings saved to pgvector
 11. **Status Update**: Document marked as "completed"
 
 **Technologies:**
 - **Docling**: IBM's document understanding library
-- **FAISS**: Facebook's vector similarity search
+- **pgvector**: PostgreSQL vector similarity search extension
 - **OpenAI Embeddings**: text-embedding-3-small (1536 dimensions)
 
 ### 4. RAG Query Engine
@@ -184,10 +184,10 @@ PIC = SUM(capital_calls.amount) - SUM(adjustments.amount)
 - `adjustments`: Rebalancing entries
 - `documents`: Uploaded document metadata
 
-**FAISS Vector Store:**
-- Index type: IndexFlatL2 (exact search)
-- Dimension: 1536 (OpenAI embeddings)
-- Metadata: Stored separately in pickle file
+**pgvector Vector Store:**
+- Index type: ivfflat (vector_cosine_ops)
+- Dimension: 1536 (OpenAI embeddings) or 384 (sentence-transformers)
+- Metadata: Stored in JSONB alongside embeddings
 - Includes: document_id, fund_id, page_number, chunk_index
 
 **Redis:**
@@ -204,7 +204,7 @@ User → Frontend → Backend API → File System
                               → Background Task
                                   → Docling Parser
                                   → Table Parser → PostgreSQL (transactions)
-                                  → Text Chunker → Embeddings → FAISS
+                                  → Text Chunker → Embeddings → pgvector
                               → Status Update → PostgreSQL
 ```
 
@@ -224,7 +224,7 @@ User → Frontend → Backend API → Query Engine
 ### Current Architecture (MVP)
 - Single server deployment
 - In-memory conversation storage
-- Local FAISS index
+- pgvector-backed index in PostgreSQL
 - Synchronous processing
 
 ### Production Recommendations

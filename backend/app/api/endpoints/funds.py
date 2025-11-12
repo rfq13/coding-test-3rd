@@ -2,6 +2,7 @@
 Fund API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.session import get_db
@@ -15,6 +16,8 @@ from app.schemas.transaction import (
     TransactionList
 )
 from app.services.metrics_calculator import MetricsCalculator
+import pandas as pd
+import io
 
 router = APIRouter()
 
@@ -159,3 +162,95 @@ async def get_fund_metrics(fund_id: int, db: Session = Depends(get_db)):
     metrics = calculator.calculate_all_metrics(fund_id)
     
     return FundMetrics(**metrics)
+
+
+@router.get("/{fund_id}/export.xlsx")
+async def export_fund_excel(
+    fund_id: int,
+    include: str = Query("all", regex="^(all|transactions|metrics)$"),
+    db: Session = Depends(get_db)
+):
+    """Export fund data to Excel (metrics and/or transactions)"""
+    fund = db.query(Fund).filter(Fund.id == fund_id).first()
+    if not fund:
+        raise HTTPException(status_code=404, detail="Fund not found")
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        # Metrics
+        if include in ("all", "metrics"):
+            calculator = MetricsCalculator(db)
+            metrics = calculator.calculate_all_metrics(fund_id)
+            metrics_df = pd.DataFrame([
+                {"Metric": k, "Value": v} for k, v in metrics.items()
+            ])
+            metrics_df.to_excel(writer, sheet_name="Metrics", index=False)
+
+        # Transactions
+        if include in ("all", "transactions"):
+            cc_items = (
+                db.query(CapitalCall)
+                .filter(CapitalCall.fund_id == fund_id)
+                .order_by(CapitalCall.call_date.asc())
+                .all()
+            )
+            cc_df = pd.DataFrame([
+                {
+                    "ID": c.id,
+                    "Date": c.call_date,
+                    "Type": c.call_type,
+                    "Amount": float(c.amount),
+                    "Description": c.description,
+                }
+                for c in cc_items
+            ])
+            cc_df.to_excel(writer, sheet_name="Capital Calls", index=False)
+
+            dist_items = (
+                db.query(Distribution)
+                .filter(Distribution.fund_id == fund_id)
+                .order_by(Distribution.distribution_date.asc())
+                .all()
+            )
+            dist_df = pd.DataFrame([
+                {
+                    "ID": d.id,
+                    "Date": d.distribution_date,
+                    "Type": d.distribution_type,
+                    "Recallable": bool(d.is_recallable),
+                    "Amount": float(d.amount),
+                    "Description": d.description,
+                }
+                for d in dist_items
+            ])
+            dist_df.to_excel(writer, sheet_name="Distributions", index=False)
+
+            adj_items = (
+                db.query(Adjustment)
+                .filter(Adjustment.fund_id == fund_id)
+                .order_by(Adjustment.adjustment_date.asc())
+                .all()
+            )
+            adj_df = pd.DataFrame([
+                {
+                    "ID": a.id,
+                    "Date": a.adjustment_date,
+                    "Type": a.adjustment_type,
+                    "Category": a.category,
+                    "Contribution Adjustment": bool(a.is_contribution_adjustment),
+                    "Amount": float(a.amount),
+                    "Description": a.description,
+                }
+                for a in adj_items
+            ])
+            adj_df.to_excel(writer, sheet_name="Adjustments", index=False)
+
+    buffer.seek(0)
+    headers = {
+        "Content-Disposition": f"attachment; filename=fund_{fund_id}_export.xlsx"
+    }
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )

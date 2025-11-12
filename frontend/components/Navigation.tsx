@@ -10,6 +10,7 @@ const navItems = [
   { href: '/upload', label: 'Upload', icon: Upload },
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/funds', label: 'Funds', icon: BarChart3 },
+  { href: '/funds/compare', label: 'Compare', icon: BarChart3 },
   { href: '/documents', label: 'Documents', icon: FileText },
 ]
 
