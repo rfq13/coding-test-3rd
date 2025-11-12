@@ -315,9 +315,19 @@ class DocumentProcessor:
         if re.search(r"\(.*\)", s):
             negative = True
         cleaned = re.sub(r"[^0-9.,-]", "", s)
-        # Normalize comma as thousand and dot as decimal if likely
-        if cleaned.count(",") > 0 and cleaned.count(".") == 0:
-            cleaned = cleaned.replace(",", ".")
+        # Normalize separators intelligently:
+        # - If both comma and dot present: assume comma thousands, dot decimals -> remove commas
+        # - If only comma present: decide based on last group length
+        if "," in cleaned and "." in cleaned:
+            cleaned = cleaned.replace(",", "")
+        elif "," in cleaned and "." not in cleaned:
+            # Determine if comma is decimal separator by checking digits after last comma
+            last_comma_idx = cleaned.rfind(",")
+            fractional_part = cleaned[last_comma_idx + 1:]
+            if 1 <= len(fractional_part) <= 2:
+                cleaned = cleaned.replace(",", ".")
+            else:
+                cleaned = cleaned.replace(",", "")
         try:
             val = Decimal(cleaned)
             return -val if negative and val is not None else val

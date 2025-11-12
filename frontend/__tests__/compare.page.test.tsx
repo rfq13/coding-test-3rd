@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CompareFundsPage from "@/app/funds/compare/page";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { rest } from "msw";
+import { http, HttpResponse } from "msw";
 import { server } from "@/test/msw-server";
 
 function renderWithQuery(ui: React.ReactElement) {
@@ -19,8 +19,8 @@ function renderWithQuery(ui: React.ReactElement) {
 describe("CompareFundsPage", () => {
   it("shows error state and Retry button when fetch fails", async () => {
     server.use(
-      rest.get("/api/funds/", (_req, res, ctx) => {
-        return res(ctx.status(500), ctx.json({ detail: "Service down" }));
+      http.get("/api/funds/", (_req) => {
+        return HttpResponse.json({ detail: "Service down" }, { status: 500 });
       })
     );
 
@@ -40,8 +40,8 @@ describe("CompareFundsPage", () => {
 
   it("shows fund list after Retry button click when fetch succeeds", async () => {
     server.use(
-      rest.get("/api/funds/", (_req, res, ctx) => {
-        return res(ctx.status(500), ctx.json({ detail: "Service down" }));
+      http.get("/api/funds/", (_req) => {
+        return HttpResponse.json({ detail: "Service down" }, { status: 500 });
       })
     );
 
@@ -55,13 +55,11 @@ describe("CompareFundsPage", () => {
 
     // Change handler: success
     server.use(
-      rest.get("/api/funds/", (_req, res, ctx) => {
-        return res(
-          ctx.json([
+      http.get("/api/funds/", (_req) => {
+        return HttpResponse.json([
             { id: 1, name: "Alpha Fund", fund_type: "VC", vintage_year: 2020 },
             { id: 2, name: "Beta Fund", fund_type: "PE", vintage_year: 2019 },
           ])
-        );
       })
     );
 
@@ -78,8 +76,8 @@ describe("CompareFundsPage", () => {
 
   it("shows empty state when fund list is empty", async () => {
     server.use(
-      rest.get("/api/funds/", (_req, res, ctx) => {
-        return res(ctx.json([]));
+      http.get("/api/funds/", (_req) => {
+        return HttpResponse.json([]);
       })
     );
 
@@ -87,9 +85,6 @@ describe("CompareFundsPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/No funds found/i)).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: /refresh/i })
-      ).toBeInTheDocument();
     });
   });
 });

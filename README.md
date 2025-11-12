@@ -522,6 +522,26 @@ cd backend
 pytest tests/ -v --cov=app
 ```
 
+### Backend Test Coverage
+
+- Latest run: 38 passed, coverage `51%` across `backend/app/*`.
+- Reproduce (Windows PowerShell from repo root):
+  - Set path: `$env:PYTHONPATH="backend"`
+  - Run: `python -m pytest -q --disable-warnings --maxfail=1 --cov=backend/app --cov-report=term-missing`
+- Troubleshooting:
+  - `ModuleNotFoundError: No module named 'app'` → ensure `$env:PYTHONPATH` is set to `backend` before running.
+  - `pytest: command not found` → `pip install -r backend/requirements.txt` and `pip install pytest`.
+- Coverage highlights (latest):
+  - `services/query_engine.py` ~90%
+  - `services/vector_store.py` ~77%
+  - `services/document_processor.py` ~86%
+  - `services/metrics_calculator.py` ~92%
+  - `services/table_parser.py` ~96%
+- Next targets to raise coverage further:
+  - `query_engine._generate_response` and `process_query` branches (calculation/general)
+  - `vector_store` index management and hybrid fusion edge cases
+
+
 ### Run Frontend Tests
 
 ```bash
